@@ -1,0 +1,243 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Coursera Practical Machine Learning
+===================================
+###Peer-graded Assignment: Prediction Assignment Writeup
+####Gerard van Meurs
+####January 2, 2019
+
+
+## Executive summary
+
+The paper is the final report of a peer-graded assignment of the Coursera Practical Machine Learning course as part of the Data Science specialization. In this paper several Machine Learning Algorithms are applied to predict whether weight lift exercises were executed exactly conform the specifications of the exercise or whether these were executed to the specifications of some common mistakes. In order for the predictions to be as accurate as possible, some preparation ot the data was involved. Data was divided in een trainingset and a testset and five different models were fitted using crossvalidation. The Random Forest model turned out te be the most accurate of the five that were tested: .9983 accuracy on the testset. This final model was also used to predict the classe of the 20 extra testcases.
+
+
+
+
+## Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har. (see the section on the Weight Lifting Exercise Dataset).
+
+##Data
+
+The training data for this project are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+If you want to read more: Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013. 
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+library(caret)
+library(ggplot2)
+library(dplyr)
+library(corrplot)
+```
+
+## Reading and preparing the data
+```{r}
+training <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+testing <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+```
+
+## Exploring the data
+
+```{r}
+dim(training)
+# str(training)
+table(training$classe)
+```
+
+The training dataset consists of 19622 observations on 160 variables. All observations have to do with weight lifting execises of 6 young adults: exactly according to the specifications (Classe = A), and four other manners corresponding to common misstakes (classe = B, C, D or E). The goal of this project is to predict the manner in which exercises were performed (classe). The distribution of classe is shown above.
+
+The training dataset is split in a training-set and a validation-set: 70/30. The training-set is used to build models and the validation-set is used to validate the models. The testing-dataset will only be used to generate the quiz results.
+
+```{r}
+inTrain <- createDataPartition(training$classe, p = 0.70, list = FALSE)
+trainSet <- training[inTrain, ]
+testSet <- training[-inTrain, ]
+dim(trainSet)
+dim(testSet)
+table(trainSet$classe); prop.table(table(trainSet$classe))
+table(testSet$classe); prop.table(table(testSet$classe))
+```
+
+## Selecting variables: removing identifying variables
+
+In a first step all identifying variables are removed:
+
+```{r}
+# removing identification variables (1:5)
+trainSet <- trainSet[ , -(1:5)]
+testSet <- testSet[ , -(1:5)]
+dim(trainSet)
+# dim(testSet)
+```
+
+In this step 5 variables are removed, leaving 155 of the 160 original variables in the dataframe.
+
+## Selecting variables: removing missing values
+
+In a next step, missing values are evaluated. Although best practice would be to look at the underlying process of missingness, in this case only the amount of missingness is considered. All variables with 90% or more missing values are removed form the training- and the testset:
+
+```{r}
+# removing variables with 90% or more missing values (NA)
+nnaVars <- sapply(trainSet, function(x) mean(is.na(x))) > 0.90
+nnaVars <- which(nnaVars)
+trainSet <- trainSet[ , -nnaVars]
+testSet <- testSet[, -nnaVars]
+dim(trainSet)
+# dim(testset)
+```
+
+This step removes 66 of the 155 remaining variables, so this results in a dataframe of 88 variables.
+
+
+## Selecting variables: removing (near) zero variance variables
+
+In the next step variance of the predictors is considered. All variables with zero or near zero variance are removed from both the training- and the testset:
+
+```{r}
+# removing variables with Near Zero Variance
+nzVars <- nearZeroVar(trainSet)
+trainSet <- trainSet[ , -nzVars]
+testSet <- testSet[, -nzVars]
+dim(trainSet)
+# dim(testSet)
+```
+
+This step removed 34 of the remaining 88 variables, resulting in a datafram of only 54 variables.
+
+
+## Selecting variables: removing highly correlating variables
+
+After this, the mutual correlation between the remaining predictors is examined, to prevent potential problems associated with multicollinearity. First a visual presentation of the correlationmatrix is produced for visual inspection. After that a set of highly correlated variables (> 0.85) is selected by the findCorrelation() function of the caret-package. This function removes a minimum set of predictors to ensure that all pairwise correlations remain below a given threshold (in this case 0.85). This procedure removes another 9 predictors in both training- and testset:
+
+```{r}
+# looking at the correlations between the numerical predictors
+corMatrix <- cor(trainSet[, -54])
+corrplot(corMatrix, order = "FPC", method = "color", type = "lower", tl.cex = 0.6, tl.col = rgb(0, 0, 0))
+# removing higly correlated predictors (cor > 0.85)
+hcVar <- findCorrelation(corMatrix, cutoff = 0.85)
+hcVar
+trainSet <- trainSet[ , -hcVar]
+testSet <- testSet[, -hcVar]
+dim(trainSet)
+# dim(testSet)
+```
+
+This final dataprep-step removed another 9 variables, leaving a dataframe of 45 variables. After this data-preparation, a new training- and testset was computed with the preProcess() function of the caret-package (preProcess(trainSet, method = c("BoxCox", "center", "scale", "pca"))). Because the accuracy of the results with this transformed dataset was less than the corresponding accuracy with the raw data (with one exception for the knn-algorithm), the raw data is used in comparing the  different algorithms.
+
+```{r eval=FALSE, include=FALSE}
+trans <- preProcess(trainSet, method = c("BoxCox", "center", "scale", "pca"))
+trans
+xtrain <- predict(trans, trainSet); head(xtrain); str(xtrain)
+xtest <- predict(trans, testSet); head(xtest); str(xtest)
+```
+
+
+## Fitting prediction models
+
+In this part five different models will be fitted to the trainingdata (and evaluated against the testdata).
+
+## Random Forest (RF)
+
+```{r}
+# Random Forest
+set.seed(131055)
+trControl <- trainControl(method = "cv", number = 5, verboseIter = FALSE)
+mod_rf <- train(classe ~ ., data = trainSet, method = "rf", trControl = trControl)
+# mod_rf$finalModel; suppress: to much output
+predict_rf <- predict(mod_rf, newdata = testSet)
+confMat_rf <- confusionMatrix(predict_rf, testSet$classe)
+confMat_rf
+plot(confMat_rf$table, main = paste("Random Forest Accuracy =", round(confMat_rf$overall["Accuracy"], 4)))
+```
+
+
+## Linear Discriminant Analysis (LDA)
+
+```{r}
+set.seed(131055)
+trControl <- trainControl(method = "cv", number = 5, verboseIter = FALSE)
+mod_lda <- train(classe ~ ., data = trainSet, method = "lda", trControl = trControl)
+# mod_lda$finalModel; suppress: to much output
+predict_lda <- predict(mod_lda, newdata = testSet)
+confMat_lda <- confusionMatrix(predict_lda, testSet$classe)
+confMat_lda
+plot(confMat_lda$table, main = paste("Linear Discriminant Accuracy =", round(confMat_lda$overall["Accuracy"], 4)))
+```
+
+
+## K Nearest Neighbor (KNN)
+
+```{r}
+set.seed(131055)
+trControl <- trainControl(method = "cv", number = 5, verboseIter = FALSE)
+mod_knn <- train(classe ~ ., data = trainSet, method = "knn", trControl = trControl)
+# mod_knn$finalModel; suppress: to much output
+predict_knn <- predict(mod_knn, newdata = testSet)
+confMat_knn <- confusionMatrix(predict_knn, testSet$classe)
+confMat_knn
+plot(confMat_knn$table, main = paste("K Nearest Neighbor Accuracy =", round(confMat_knn$overall["Accuracy"], 4)))
+```
+
+
+## Gradient Boosting Model(GBM)
+
+```{r message=FALSE}
+set.seed(131055)
+trControl <- trainControl(method = "cv", number = 5, verboseIter = FALSE)
+mod_gbm <- train(classe ~ ., data = trainSet, method = "gbm", trControl = trControl, verbose = FALSE)
+# mod_gbm$finalModel; suppress: to much output
+predict_gbm <- predict(mod_gbm, newdata = testSet)
+confMat_gbm <- confusionMatrix(predict_gbm, testSet$classe)
+confMat_gbm
+plot(confMat_gbm$table, main = paste("GBM Accuracy =", round(confMat_gbm$overall["Accuracy"], 4)))
+```
+
+
+## Multinominal Model (MULTINOM)
+
+```{r message=FALSE}
+set.seed(131055)
+trControl <- trainControl(method = "cv", number = 5, verboseIter = FALSE)
+mod_multinom <- train(classe ~ ., data = trainSet, method = "multinom", trControl = trControl, trace = FALSE)
+# mod_multinom$finalModel; suppress: to much output
+predict_multinom <- predict(mod_multinom, newdata = testSet)
+confMat_multinom <- confusionMatrix(predict_multinom, testSet$classe)
+confMat_multinom
+plot(confMat_multinom$table, main = paste("Multinomial Model Accuracy =", round(confMat_multinom$overall["Accuracy"], 4)))
+```
+
+## Final Prediction on the Test-set
+
+All models were trained with crossvalidation (5 folds). Sorted on performance to predict the test data, the ranking of the different models is as follows: 
+
+*1: `r round(confMat_rf$overall["Accuracy"], 4)` (Random Forest)  
+*2: `r round(confMat_gbm$overall["Accuracy"], 4)` (GBM)  
+*3: `r round(confMat_knn$overall["Accuracy"], 4)` (KNN)  
+*4: `r round(confMat_lda$overall["Accuracy"], 4)` (LDA)  
+*5: `r round(confMat_multinom$overall["Accuracy"], 4)` (Multinom)  
+
+On accuracy, Random Forest is a clear winner. And it is clear from the corresponding plot that all categories of classe are more or less equally predicted. 
+
+So for the final prediction on the extra test-set of 20 observations, the final Random Forest model is choosen.
+
+
+```{r}
+predict_final <- predict(mod_rf, newdata = testing)
+predict_final
+```
+
